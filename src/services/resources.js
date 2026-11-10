@@ -258,6 +258,21 @@ async function saveResource(manager, table, raw, id, user) {
     if (user.tenant_id) input.tenant_id = user.tenant_id;
     if (input.rol === "CLIENTE" && user.tenant_id && (!current || current.rol !== "CLIENTE"))
       throw bad("Solo Flotnix puede crear usuarios tipo cliente", 403);
+    if (current && (current.rol === "CLIENTE" || input.rol === "CLIENTE") &&
+        (input.rol !== current.rol || input.tenant_id !== current.tenant_id || input.cliente_id !== current.cliente_id))
+      throw bad("El usuario cliente no puede cambiar de tipo ni de espacio", 403);
+    if (input.rol === "CLIENTE" && !current && !user.tenant_id) {
+      if (input.tenant_id || input.cliente_id)
+        throw bad("El usuario cliente se crea sin seleccionar cuenta ni empresa");
+      const now = new Date();
+      const tenant = await repo(manager, "tenants").save({
+        nombre: input.nombre_completo,
+        activo: true,
+        created_at: now,
+        updated_at: now,
+      });
+      input.tenant_id = tenant.id;
+    }
     if (input.rol === "CLIENTE" && (!input.tenant_id || input.cliente_id))
       throw bad("El usuario cliente debe pertenecer a una cuenta, no a una empresa", 403);
     if (user.cliente_id) {
