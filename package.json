@@ -7,6 +7,7 @@
     "start": "node src/server.js",
     "db:create": "node scripts/create-database.js",
     "db:migrate": "node scripts/migrate.js",
+    "db:assign-legacy": "node scripts/assign-legacy-companies.js",
     "db:seed": "node scripts/seed.js",
     "db:setup": "node scripts/setup.js",
     "test": "node --test",

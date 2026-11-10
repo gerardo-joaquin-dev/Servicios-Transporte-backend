@@ -8,12 +8,13 @@ const { Dictionaries1793404800000 } = require("./migrations/1793404800000-Dictio
 const { ServiceAudit1794182400000 } = require("./migrations/1794182400000-ServiceAudit");
 const { TenantAccounts1794268800000 } = require("./migrations/1794268800000-TenantAccounts");
 const { ClientUserRole1794355200000 } = require("./migrations/1794355200000-ClientUserRole");
+const { AssignLegacyCompaniesToJesus1794355200001 } = require("./migrations/1794355200001-AssignLegacyCompaniesToJesus");
 
 const dataSource = new DataSource({
   type: "postgres",
   url: required("DATABASE_URL"),
   entities: Object.values(schemas),
-  migrations: [InitialSchema1761868800000, Dictionaries1793404800000, ServiceAudit1794182400000, TenantAccounts1794268800000, ClientUserRole1794355200000],
+  migrations: [InitialSchema1761868800000, Dictionaries1793404800000, ServiceAudit1794182400000, TenantAccounts1794268800000, ClientUserRole1794355200000, AssignLegacyCompaniesToJesus1794355200001],
   synchronize: false,
   migrationsRun: false,
   logging: process.env.DB_LOG === "true",
