@@ -3,8 +3,7 @@ const { todayMexico } = require("../utils/date");
 const { repo, requireOne, bad } = require("./data");
 const {
   adminOnly,
-  platformOnly,
-  owner,
+  assertCompanyAccess,
   activeClient,
   linkRows,
 } = require("./resources");
@@ -12,7 +11,7 @@ const { service: serviceSchema, z } = require("../validation");
 
 const serviceAccess = async (manager, id, user) => {
   const service = await requireOne(manager, "servicios", id, "Servicio");
-  owner(user, service.cliente_id);
+  await assertCompanyAccess(manager, user, service.cliente_id);
   return service;
 };
 const auditActor = (manager, user) =>
@@ -27,7 +26,7 @@ const requireIds = (ids) => {
 };
 
 async function validateService(manager, input, user, currentId) {
-  owner(user, input.cliente_id);
+  await assertCompanyAccess(manager, user, input.cliente_id);
   await activeClient(manager, input.cliente_id);
   const route = await requireOne(manager, "rutas", input.ruta_id, "Ruta");
   if (!route.activo) throw bad("Selecciona una ruta activa");
@@ -265,7 +264,7 @@ async function reopenRejectedService(manager, id, user) {
 
 async function createConsolidation(manager, body, user) {
   await auditActor(manager, user);
-  platformOnly(user);
+  adminOnly(user);
   const { cliente_id, from, to } = body;
   if (
     !Number.isInteger(cliente_id) ||
@@ -274,7 +273,7 @@ async function createConsolidation(manager, body, user) {
     from > to
   )
     throw bad("Periodo o empresa inválidos");
-  owner(user, cliente_id);
+  await assertCompanyAccess(manager, user, cliente_id);
   await activeClient(manager, cliente_id);
   const eligible = await manager.query(
     `SELECT id FROM servicios WHERE cliente_id=$1 AND estatus_operativo='FINALIZADO' AND estatus_administrativo='ABIERTO' AND (fecha_hora_programada AT TIME ZONE 'America/Mexico_City')::date BETWEEN $2::date AND $3::date FOR UPDATE`,
@@ -311,14 +310,14 @@ async function createConsolidation(manager, body, user) {
 
 async function advanceConsolidation(manager, id, action, serviceIds, user) {
   await auditActor(manager, user);
-  platformOnly(user);
+  adminOnly(user);
   const record = await requireOne(
     manager,
     "consolidaciones",
     id,
     "Consolidación",
   );
-  owner(user, record.cliente_id);
+  await assertCompanyAccess(manager, user, record.cliente_id);
   const links = await manager.query(
     "SELECT * FROM consolidacion_servicios WHERE consolidacion_id=$1 FOR UPDATE",
     [id],
@@ -377,14 +376,14 @@ async function advanceConsolidation(manager, id, action, serviceIds, user) {
 
 async function createInvoice(manager, consolidationId, serviceIds, user) {
   await auditActor(manager, user);
-  platformOnly(user);
+  adminOnly(user);
   const consolidation = await requireOne(
     manager,
     "consolidaciones",
     consolidationId,
     "Consolidación",
   );
-  owner(user, consolidation.cliente_id);
+  await assertCompanyAccess(manager, user, consolidation.cliente_id);
   if (consolidation.estatus !== "APROBADO")
     throw bad("La consolidación debe estar aprobada");
   const links = await manager.query(
@@ -433,9 +432,9 @@ async function createInvoice(manager, consolidationId, serviceIds, user) {
 
 async function advanceInvoice(manager, id, action, serviceIds, user) {
   await auditActor(manager, user);
-  platformOnly(user);
+  adminOnly(user);
   const invoice = await requireOne(manager, "facturas", id, "Factura");
-  owner(user, invoice.cliente_id);
+  await assertCompanyAccess(manager, user, invoice.cliente_id);
   const links = await manager.query(
     "SELECT * FROM factura_servicios WHERE factura_id=$1 FOR UPDATE",
     [id],
@@ -489,7 +488,7 @@ async function advanceInvoice(manager, id, action, serviceIds, user) {
 
 async function payOperator(manager, id, user) {
   await auditActor(manager, user);
-  platformOnly(user);
+  adminOnly(user);
   await manager.query("SELECT id FROM servicios WHERE id=$1 FOR UPDATE", [id]);
   const service = await serviceAccess(manager, id, user);
   if (

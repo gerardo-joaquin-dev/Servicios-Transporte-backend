@@ -32,8 +32,12 @@ const adminOnly = (user) => {
 };
 const platformOnly = (user) => {
   adminOnly(user);
-  if (user.cliente_id)
+  if (user.tenant_id)
     throw bad("Acceso reservado al administrador de la plataforma", 403);
+};
+const tenantAdminOnly = (user) => {
+  adminOnly(user);
+  if (user.cliente_id) throw bad("Acceso reservado al administrador del cliente", 403);
 };
 const owner = (user, value) => {
   if (user.cliente_id && value !== user.cliente_id)
@@ -45,6 +49,18 @@ const activeClient = async (manager, id) => {
   const client = await exists(manager, "clientes", id, "Empresa");
   if (!client.activo) throw bad("Selecciona una empresa activa");
   return client;
+};
+const assertCompanyAccess = async (manager, user, companyId) => {
+  if (!Number.isInteger(companyId) || companyId <= 0)
+    throw bad("Selecciona una empresa de tu cliente", 403);
+  const company = await exists(manager, "clientes", companyId, "Empresa");
+  if (user.tenant_id && (company.tenant_id !== user.tenant_id || (user.cliente_id && user.cliente_id !== companyId)))
+    throw bad("No tienes acceso a esta empresa", 403);
+  return company;
+};
+const activeOwnedClient = async (manager, user, id) => {
+  await assertCompanyAccess(manager, user, id);
+  return activeClient(manager, id);
 };
 const requireIds = async (manager, table, ids) => {
   for (const id of ids) await exists(manager, table, id);
@@ -75,8 +91,13 @@ const linkRows = async (
 
 async function checkAccess(manager, table, id, user) {
   const record = await exists(manager, table, id, labels[table]);
-  if (!user.cliente_id) return record;
-  owner(user, record[ownerField[table]]);
+  if (!user.tenant_id) return record;
+  if (table === "usuarios") {
+    if (record.tenant_id !== user.tenant_id || (user.cliente_id && record.cliente_id !== user.cliente_id))
+      throw bad("No tienes acceso a este usuario", 403);
+    return record;
+  }
+  await assertCompanyAccess(manager, user, record[ownerField[table]]);
   return record;
 }
 
@@ -88,25 +109,31 @@ async function validateRelations(manager, table, input, user) {
       if (input.cliente_ids.some((id) => id !== user.cliente_id))
         throw bad("El modo sólo puede asociarse a tu empresa");
     }
-    for (const id of input.cliente_ids) await activeClient(manager, id);
+    for (const id of input.cliente_ids) await activeOwnedClient(manager, user, id);
+    if (user.tenant_id && input.cliente_ids.length !== 1)
+      throw bad("Asocia el modo a una empresa del cliente");
+    if (user.tenant_id) input.propietario_cliente_id = input.cliente_ids[0];
   }
   if (["choferes", "vehiculos", "zonas", "rutas"].includes(table)) {
     if (user.cliente_id) input.propietario_cliente_id = user.cliente_id;
+    if (user.tenant_id && !input.propietario_cliente_id && table !== "rutas")
+      throw bad("Selecciona la empresa propietaria");
     if (input.propietario_cliente_id)
-      await activeClient(manager, input.propietario_cliente_id);
+      await activeOwnedClient(manager, user, input.propietario_cliente_id);
   }
-  if (["pasajeros", "tarifas_cliente", "usuarios"].includes(table)) {
+  if (["pasajeros", "tarifas_cliente"].includes(table)) {
     if (user.cliente_id) input.cliente_id = user.cliente_id;
-    if (input.cliente_id) await activeClient(manager, input.cliente_id);
+    if (input.cliente_id) await activeOwnedClient(manager, user, input.cliente_id);
   }
   if (table === "locaciones") {
     if (user.cliente_id) input.cliente_id = user.cliente_id;
     const zone = await exists(manager, "zonas", input.zona_id, "Zona");
+    if (user.tenant_id && !input.cliente_id) input.cliente_id = zone.propietario_cliente_id;
     if (user.cliente_id && zone.propietario_cliente_id !== user.cliente_id)
       throw bad("La zona no pertenece a tu empresa");
     if (input.cliente_id && zone.propietario_cliente_id && zone.propietario_cliente_id !== input.cliente_id)
       throw bad("La zona pertenece a otra empresa");
-    if (input.cliente_id) await activeClient(manager, input.cliente_id);
+    if (input.cliente_id) await activeOwnedClient(manager, user, input.cliente_id);
   }
   if (table === "vehiculos") {
     const type = await repo(manager, "tipos_unidad").findOneBy({
@@ -130,7 +157,12 @@ async function validateRelations(manager, table, input, user) {
     const zone = await exists(manager, "zonas", input.zona_id, "Zona");
     if (user.cliente_id && zone.propietario_cliente_id !== user.cliente_id)
       throw bad("La zona no pertenece a tu empresa");
-    for (const id of input.cliente_ids) await activeClient(manager, id);
+    if (user.tenant_id && zone.propietario_cliente_id !== input.cliente_ids[0])
+      throw bad("La zona no pertenece a la empresa de la ruta");
+    for (const id of input.cliente_ids) await activeOwnedClient(manager, user, id);
+    if (user.tenant_id && input.cliente_ids.length !== 1)
+      throw bad("Asocia la ruta a una empresa del cliente");
+    if (user.tenant_id) input.propietario_cliente_id = input.cliente_ids[0];
     if (input.propietario_cliente_id && input.cliente_ids.some((id) => id !== input.propietario_cliente_id))
       throw bad("Una ruta de empresa solo puede asociarse a su propietaria");
     if (input.cliente_ids.length > 1 && zone.propietario_cliente_id)
@@ -195,18 +227,50 @@ async function validateRelations(manager, table, input, user) {
 
 async function saveResource(manager, table, raw, id, user) {
   adminOnly(user);
-  if (table === "clientes" && !id) platformOnly(user);
-  if (table === "clientes" && id && user.cliente_id && id !== user.cliente_id)
-    throw bad("Acceso denegado", 403);
+  if (table === "clientes" && !id) tenantAdminOnly(user);
   const current = id ? await checkAccess(manager, table, id, user) : null;
   const schema = resourceSchemas[table];
   if (!schema) throw bad("Recurso desconocido", 404);
   let input = schema.parse(
     table === "clientes" && current ? { ...current, ...raw } : raw,
   );
+  if (table === "clientes") {
+    if (current && input.tenant_id !== current.tenant_id)
+      throw bad("No se puede mover una empresa entre clientes", 403);
+    if (user.tenant_id) input.tenant_id = user.tenant_id;
+    if (!current && !input.tenant_id) {
+      const now = new Date();
+      const tenant = await repo(manager, "tenants").save({ nombre: input.razon_social, activo: true, created_at: now, updated_at: now });
+      input.tenant_id = tenant.id;
+    }
+    if (input.tenant_id && user.tenant_id && input.tenant_id !== user.tenant_id)
+      throw bad("No tienes acceso a este cliente", 403);
+    if (!current && input.tenant_id) {
+      const tenant = await requireOne(manager, "tenants", input.tenant_id, "Cliente de plataforma");
+      if (!tenant.activo) throw bad("El cliente de plataforma está inactivo");
+    }
+  }
   if (table === "clientes" && current && user.cliente_id && input.activo !== current.activo)
     throw bad("Solo el administrador maestro puede activar o desactivar clientes", 403);
-  input = await validateRelations(manager, table, input, user);
+  if (table === "usuarios") {
+    if (user.tenant_id) input.tenant_id = user.tenant_id;
+    if (user.cliente_id) {
+      input.cliente_id = user.cliente_id;
+      if (input.rol === "ADMINISTRADOR" || current?.rol === "ADMINISTRADOR")
+        throw bad("Solo el administrador del cliente puede crear administradores", 403);
+    }
+    if (input.cliente_id) {
+      const company = await activeOwnedClient(manager, user, input.cliente_id);
+      if (!input.tenant_id) input.tenant_id = company.tenant_id;
+      if (input.tenant_id !== company.tenant_id) throw bad("El usuario y la empresa deben pertenecer al mismo cliente", 403);
+    } else if (user.tenant_id && input.tenant_id !== user.tenant_id) {
+      throw bad("No puedes crear administradores de plataforma", 403);
+    }
+    if (current && id === user.id && (input.tenant_id !== current.tenant_id || input.cliente_id !== current.cliente_id || input.rol !== current.rol))
+      throw bad("No puedes cambiar tu propio nivel de acceso", 403);
+  } else {
+    input = await validateRelations(manager, table, input, user);
+  }
   if (table === "choferes" && input.vencimiento_licencia < todayMexico())
     input.estatus = "INACTIVO";
   if (table === "vehiculos" && input.vencimiento_poliza < todayMexico())
@@ -214,8 +278,6 @@ async function saveResource(manager, table, raw, id, user) {
   if (table === "usuarios") {
     if (!id && !input.password)
       throw bad("Captura una contraseña inicial de al menos 12 caracteres");
-    if (id && user.cliente_id && current.cliente_id !== user.cliente_id)
-      throw bad("Acceso denegado", 403);
     if (id && id === user.id && !input.activo)
       throw bad("No puedes desactivar tu propia cuenta");
     const password_hash = input.password
@@ -227,6 +289,7 @@ async function saveResource(manager, table, raw, id, user) {
         !input.activo ||
         input.rol !== current.rol ||
         input.cliente_id !== current.cliente_id ||
+        input.tenant_id !== current.tenant_id ||
         input.correo !== current.correo);
     const token_version = current
       ? current.token_version + (revoke ? 1 : 0)
@@ -318,8 +381,10 @@ async function saveResource(manager, table, raw, id, user) {
 
 async function deleteResource(manager, table, id, user) {
   adminOnly(user);
-  if (table === "clientes") platformOnly(user);
-  await checkAccess(manager, table, id, user);
+  if (table === "clientes") tenantAdminOnly(user);
+  const record = await checkAccess(manager, table, id, user);
+  if (table === "usuarios" && user.cliente_id && record.rol === "ADMINISTRADOR")
+    throw bad("Solo el administrador del cliente puede eliminar administradores", 403);
   if (table === "usuarios" && id === user.id)
     throw bad("No puedes eliminar tu propia cuenta");
   await repo(manager, table).delete(id);
@@ -355,9 +420,12 @@ module.exports = {
   saveVehicleTypes,
   adminOnly,
   platformOnly,
+  tenantAdminOnly,
   owner,
   exists,
   activeClient,
+  assertCompanyAccess,
+  activeOwnedClient,
   linkRows,
   checkAccess,
 };

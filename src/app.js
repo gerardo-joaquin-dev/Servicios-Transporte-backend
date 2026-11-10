@@ -13,8 +13,10 @@ const {
   deleteResource,
   saveVehicleTypes,
   adminOnly,
+  platformOnly,
 } = require("./services/resources");
 const transport = require("./services/transport");
+const tenants = require("./services/tenants");
 const publicService = (service, user) => {
   if (user.rol === "ADMINISTRADOR") return service;
   const { tarifa_id, importe_cliente, importe_operador, ...safe } = service;
@@ -49,8 +51,10 @@ if (jwtSecret.length < 32)
   throw new Error("JWT_SECRET debe tener al menos 32 caracteres");
 
 const roleFor = (user) =>
-  !user.cliente_id && user.rol === "ADMINISTRADOR"
+  !user.tenant_id && user.rol === "ADMINISTRADOR"
     ? "PLATFORM_ADMIN"
+    : !user.cliente_id && user.rol === "ADMINISTRADOR"
+      ? "TENANT_ADMIN"
     : user.rol === "ADMINISTRADOR"
       ? "COMPANY_ADMIN"
       : "DISPATCHER";
@@ -59,6 +63,7 @@ const publicUser = (user) => ({
   nombre_completo: user.nombre_completo,
   correo: user.correo,
   role: roleFor(user),
+  tenant_id: user.tenant_id,
   cliente_id: user.cliente_id,
 });
 
@@ -83,11 +88,16 @@ app.post("/api/auth/login", loginLimit, async (req, res) => {
         id: user.cliente_id,
       })
     : null;
+  const tenant = user?.tenant_id
+    ? await repo(dataSource.manager, "tenants").findOneBy({ id: user.tenant_id })
+    : null;
   if (
     !user ||
     !user.activo ||
+    (user.tenant_id && !tenant?.activo) ||
     (user.cliente_id && !company?.activo) ||
-    (!user.cliente_id && user.rol !== "ADMINISTRADOR") ||
+    (user.cliente_id && company?.tenant_id !== user.tenant_id) ||
+    (!user.tenant_id && user.rol !== "ADMINISTRADOR") ||
     !user.password_hash ||
     !(await bcrypt.compare(password, user.password_hash))
   )
@@ -120,11 +130,16 @@ async function authenticate(req, _res, next) {
           id: user.cliente_id,
         })
       : null;
+    const tenant = user?.tenant_id
+      ? await repo(dataSource.manager, "tenants").findOneBy({ id: user.tenant_id })
+      : null;
     if (
       !user ||
       !user.activo ||
+      (user.tenant_id && !tenant?.activo) ||
       (user.cliente_id && !company?.activo) ||
-      (!user.cliente_id && user.rol !== "ADMINISTRADOR") ||
+      (user.cliente_id && company?.tenant_id !== user.tenant_id) ||
+      (!user.tenant_id && user.rol !== "ADMINISTRADOR") ||
       user.token_version !== payload.ver
     )
       throw bad("La sesión ya no es válida", 401);
@@ -165,6 +180,16 @@ app.post("/api/auth/change-password", async (req, res) => {
 app.get("/api/data", async (req, res) =>
   res.json(scopeData(await getData(dataSource.manager), req.user)),
 );
+app.post("/api/cuentas", async (req, res) => {
+  platformOnly(req.user);
+  const result = await dataSource.transaction((manager) => tenants.createTenant(manager, req.body, req.user));
+  res.status(201).json(result);
+});
+app.put("/api/cuentas/:id", async (req, res) => {
+  platformOnly(req.user);
+  const result = await dataSource.transaction((manager) => tenants.updateTenant(manager, Number(req.params.id), req.body, req.user));
+  res.json(result);
+});
 
 const resources = {
   clientes: "clientes",
@@ -221,7 +246,7 @@ function dictionaryInput(body) {
 }
 function requirePlatform(user) {
   adminOnly(user);
-  if (user.cliente_id) throw bad("Acceso reservado al administrador de la plataforma", 403);
+  if (user.tenant_id) throw bad("Acceso reservado al administrador de la plataforma", 403);
 }
 app.post("/api/diccionarios", async (req, res) => {
   requirePlatform(req.user);

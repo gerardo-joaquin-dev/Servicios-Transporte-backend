@@ -26,6 +26,8 @@ La información guardada previamente en `localStorage` no se traslada automátic
 
 Al actualizar una instalación existente, ejecuta `npm run db:migrate` antes de iniciar la nueva versión. La migración de auditoría añade fechas, contador y eventos de creación o modificación a los servicios. Los servicios anteriores conservan sus datos, pero no se les inventa un historial retroactivo.
 
+La migración de cuentas crea `tenants` y asigna cada empresa existente a una cuenta independiente. Los usuarios de empresa conservan su acceso dentro de esa cuenta. El administrador de Flotnix crea nuevas cuentas mediante `POST /api/cuentas` y puede activarlas o desactivarlas con `PUT /api/cuentas/:id`. El administrador de cada cuenta crea empresas, administradores de cuenta, administradores de empresa y despachadores. Los administradores de empresa solo crean despachadores de su empresa. La API filtra los datos por cuenta y valida la propiedad de cada recurso en las operaciones de escritura.
+
 ## Modelo
 
 La migración inicial incluye empresas, usuarios, tipos de unidad, operadores, unidades, zonas, paradas, pasajeros, rutas, modos de servicio, tarifas, servicios, consolidaciones, facturas y envíos de ruta. Las asociaciones de rutas con paradas ordenadas, empresas, modos y pasajeros; de servicios con pasajeros; de consolidaciones y facturas con servicios están en tablas de relación con claves foráneas. Las facturas suman `importe_cliente` sin agregar IVA.

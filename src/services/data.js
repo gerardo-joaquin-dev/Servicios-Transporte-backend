@@ -36,6 +36,7 @@ const valuesFor = (rows, parent, child, parentId) =>
 
 async function getData(manager) {
   const tables = [
+    "tenants",
     "clientes",
     "usuarios",
     "choferes",
@@ -162,70 +163,69 @@ async function getData(manager) {
 }
 
 function scopeData(data, user) {
-  if (!user.cliente_id) return data;
-  const id = user.cliente_id;
-  const services = data.servicios.filter((item) => item.cliente_id === id);
-  const routeIds = new Set([
-    ...services.map((item) => item.ruta_id),
-    ...data.tarifas_cliente
-      .filter((item) => item.cliente_id === id)
-      .map((item) => item.ruta_id),
-  ]);
-  const routes = data.rutas.filter(
-    (item) =>
-      (item.propietario_cliente_id === null || item.propietario_cliente_id === id) &&
-      (routeIds.has(item.id) || item.propietario_cliente_id === id || item.cliente_ids.includes(id)),
+  if (!user.tenant_id) return data;
+  const companies = data.clientes.filter((company) =>
+    company.tenant_id === user.tenant_id &&
+    (!user.cliente_id || company.id === user.cliente_id),
+  );
+  const companyIds = new Set(companies.map((company) => company.id));
+  const services = data.servicios.filter((item) => companyIds.has(item.cliente_id));
+  const rates = data.tarifas_cliente.filter((item) => companyIds.has(item.cliente_id));
+  const routes = data.rutas.filter((item) =>
+    (item.propietario_cliente_id == null || companyIds.has(item.propietario_cliente_id)) &&
+    item.cliente_ids.some((id) => companyIds.has(id)),
   );
   const zoneIds = new Set(routes.map((item) => item.zona_id));
   const stopIds = new Set(routes.flatMap((item) => item.locacion_ids));
   const driverIds = new Set(services.map((item) => item.chofer_id));
   const vehicleIds = new Set(services.map((item) => item.vehiculo_id));
+  const modes = data.modos_servicio.filter((item) =>
+    (item.propietario_cliente_id == null || companyIds.has(item.propietario_cliente_id)) &&
+    item.cliente_ids.some((id) => companyIds.has(id)),
+  );
+  const modeIds = new Set(modes.map((item) => item.id));
+  const admin = user.rol === "ADMINISTRADOR";
   return {
     ...data,
-    usuarios:
-      user.rol === "ADMINISTRADOR"
-        ? data.usuarios.filter((item) => item.cliente_id === id)
-        : [],
-    clientes: data.clientes.filter((item) => item.id === id),
-    pasajeros: data.pasajeros.filter((item) => item.cliente_id === id),
-    servicios: user.rol === "ADMINISTRADOR" ? services : services.map(({ tarifa_id, importe_cliente, importe_operador, ...service }) => service),
-    servicio_auditoria: user.rol === "ADMINISTRADOR"
-      ? data.servicio_auditoria.filter((item) => item.cliente_id === id)
-      : [],
+    tenants: data.tenants.filter((item) => item.id === user.tenant_id),
+    clientes: companies,
+    usuarios: admin ? data.usuarios.filter((item) =>
+      item.tenant_id === user.tenant_id &&
+      (!user.cliente_id || item.cliente_id === user.cliente_id),
+    ) : [],
+    pasajeros: data.pasajeros.filter((item) => companyIds.has(item.cliente_id)),
+    servicios: admin ? services : services.map(({ tarifa_id, importe_cliente, importe_operador, ...item }) => item),
+    servicio_auditoria: admin ? data.servicio_auditoria.filter((item) => companyIds.has(item.cliente_id)) : [],
     rutas: routes.map((route) => ({
       ...route,
-      cliente_ids: route.cliente_ids.filter((clientId) => clientId === id),
-      pasajero_ids: route.pasajero_ids.filter((passengerId) =>
-        data.pasajeros.some(
-          (person) => person.id === passengerId && person.cliente_id === id,
-        ),
+      cliente_ids: route.cliente_ids.filter((id) => companyIds.has(id)),
+      pasajero_ids: route.pasajero_ids.filter((id) =>
+        data.pasajeros.some((person) => person.id === id && companyIds.has(person.cliente_id)),
       ),
-      modo_servicio_ids: route.modo_servicio_ids.filter((modeId) =>
-        data.modos_servicio.some(
-          (mode) => mode.id === modeId && mode.cliente_ids.includes(id),
-        ),
-      ),
+      modo_servicio_ids: route.modo_servicio_ids.filter((id) => modeIds.has(id)),
     })),
-    zonas: data.zonas.filter(
-      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (zoneIds.has(item.id) || item.propietario_cliente_id === id),
+    zonas: data.zonas.filter((item) =>
+      (item.propietario_cliente_id == null || companyIds.has(item.propietario_cliente_id)) &&
+      (companyIds.has(item.propietario_cliente_id) || zoneIds.has(item.id)),
     ),
-    locaciones: data.locaciones.filter(
-      (item) => (item.cliente_id === null || item.cliente_id === id) && (stopIds.has(item.id) || item.cliente_id === id),
+    locaciones: data.locaciones.filter((item) =>
+      (item.cliente_id == null || companyIds.has(item.cliente_id)) &&
+      (companyIds.has(item.cliente_id) || stopIds.has(item.id)),
     ),
-    choferes: data.choferes.filter(
-      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (driverIds.has(item.id) || item.propietario_cliente_id === id),
+    choferes: data.choferes.filter((item) =>
+      (item.propietario_cliente_id == null || companyIds.has(item.propietario_cliente_id)) &&
+      (companyIds.has(item.propietario_cliente_id) || driverIds.has(item.id)),
     ),
-    vehiculos: data.vehiculos.filter(
-      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (vehicleIds.has(item.id) || item.propietario_cliente_id === id),
+    vehiculos: data.vehiculos.filter((item) =>
+      (item.propietario_cliente_id == null || companyIds.has(item.propietario_cliente_id)) &&
+      (companyIds.has(item.propietario_cliente_id) || vehicleIds.has(item.id)),
     ),
-    tarifas_cliente: user.rol === "ADMINISTRADOR"
-      ? data.tarifas_cliente.filter((item) => item.cliente_id === id)
-      : [],
-    modos_servicio: data.modos_servicio
-      .filter((item) => item.cliente_ids.includes(id))
-      .map((item) => ({ ...item, cliente_ids: [id] })),
-    facturas: [],
-    consolidaciones: [],
+    tarifas_cliente: admin ? rates : [],
+    modos_servicio: modes.map((item) => ({
+      ...item, cliente_ids: item.cliente_ids.filter((id) => companyIds.has(id)),
+    })),
+    facturas: admin ? data.facturas.filter((item) => companyIds.has(item.cliente_id)) : [],
+    consolidaciones: admin ? data.consolidaciones.filter((item) => companyIds.has(item.cliente_id)) : [],
     envios_ruta: data.envios_ruta.filter((item) =>
       services.some((service) => service.id === item.servicio_id),
     ),

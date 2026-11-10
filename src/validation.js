@@ -18,13 +18,14 @@ const dateTime = z.iso.datetime({ offset: true });
 const httpUrl = z
   .url()
   .refine(
-    (value) => ["http:", "https:"].includes(new URL(value).protocol),
+    (value) => { try { return ["http:", "https:"].includes(new URL(value).protocol); } catch { return false; } },
     "El enlace debe usar HTTP o HTTPS",
   );
 const status = (values) => z.enum(values);
 const active = z.boolean();
 
 const client = z.object({
+  tenant_id: maybeId.optional(),
   razon_social: name,
   rfc_tax_id: z.string().trim().max(32),
   telefono: phone,
@@ -130,6 +131,7 @@ const mode = z.object({
 });
 const user = z
   .object({
+    tenant_id: maybeId.optional(),
     cliente_id: maybeId,
     nombre_completo: name,
     correo: email,

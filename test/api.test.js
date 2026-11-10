@@ -67,9 +67,12 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       },
       token,
     );
-    const otherClient = await call("/clientes", "POST", { ...client, razon_social: "Empresa Dos", rfc_tax_id: "XYZ010101BBB", correo: "otra@example.com" }, token);
+    const otherClient = await call("/clientes", "POST", { ...client, tenant_id: null, razon_social: "Empresa Dos", rfc_tax_id: "XYZ010101BBB", correo: "otra@example.com" }, token);
+    assert.notEqual(otherClient.tenant_id, client.tenant_id);
     const otherUser = await call("/usuarios", "POST", { cliente_id: otherClient.id, nombre_completo: "Otro administrador", correo: "otro-admin@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, token);
     const otherLogin = await call("/auth/login", "POST", { email: otherUser.correo, password: "123456789012" });
+    assert.equal(otherLogin.user.tenant_id, otherClient.tenant_id);
+    assert.equal(otherLogin.user.cliente_id, otherClient.id);
     const zone = await call(
       "/zonas",
       "POST",
@@ -367,7 +370,7 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     assert.equal(otherScoped.clientes.length, 1);
     assert.equal(otherScoped.servicios.length, 0);
     assert.ok(!otherScoped.usuarios.some((item) => item.id === user.id));
-    assert.equal(scoped.facturas.length, 0);
+    assert.equal(scoped.facturas.length, 1);
     const dispatchData = await call(
       "/data",
       "GET",
@@ -394,7 +397,7 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        cliente_id: client.id,
+        cliente_id: otherClient.id,
         from: "2026-10-30",
         to: "2026-10-30",
       }),
@@ -415,6 +418,64 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     assert.equal(inactiveToken.status, 401);
     const inactiveLogin = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: otherUser.correo, password: "123456789012" }) });
     assert.equal(inactiveLogin.status, 401);
+    const account = await call("/cuentas", "POST", {
+      nombre: "Cliente Principal",
+      admin: { nombre_completo: "Dueño Cliente", correo: "dueno@example.com", password: "123456789012" },
+    }, token);
+    const tenantLogin = await call("/auth/login", "POST", { email: "dueno@example.com", password: "123456789012" });
+    assert.equal(tenantLogin.user.role, "TENANT_ADMIN");
+    assert.equal(tenantLogin.user.tenant_id, account.tenant.id);
+    const tenantCompany = await call("/clientes", "POST", { ...client, tenant_id: account.tenant.id, razon_social: "Empresa del cliente", rfc_tax_id: "CLI010101CCC", correo: "empresa-cliente@example.com" }, tenantLogin.token);
+    assert.equal(tenantCompany.tenant_id, account.tenant.id);
+    const peer = await call("/usuarios", "POST", { cliente_id: null, nombre_completo: "Colega", correo: "colega@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, tenantLogin.token);
+    assert.equal(peer.tenant_id, account.tenant.id);
+    assert.equal((await call("/auth/login", "POST", { email: peer.correo, password: "123456789012" })).user.role, "TENANT_ADMIN");
+    const companyManager = await call("/usuarios", "POST", { cliente_id: tenantCompany.id, nombre_completo: "Gerente", correo: "gerente@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, tenantLogin.token);
+    const managerLogin = await call("/auth/login", "POST", { email: companyManager.correo, password: "123456789012" });
+    assert.equal(managerLogin.user.role, "COMPANY_ADMIN");
+    const tenantData = await call("/data", "GET", undefined, tenantLogin.token);
+    assert.deepEqual(tenantData.clientes.map((item) => item.id), [tenantCompany.id]);
+    assert.ok(!tenantData.usuarios.some((item) => item.id === user.id));
+    const crossTenant = await fetch(`${base}/api/usuarios`, { method: "POST", headers: { Authorization: `Bearer ${tenantLogin.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ cliente_id: client.id, nombre_completo: "Intruso", correo: "intruso@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }) });
+    assert.equal(crossTenant.status, 403);
+    const managerCreatesAdmin = await fetch(`${base}/api/usuarios`, { method: "POST", headers: { Authorization: `Bearer ${managerLogin.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ cliente_id: tenantCompany.id, nombre_completo: "Otro gerente", correo: "otro-gerente@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }) });
+    assert.equal(managerCreatesAdmin.status, 403);
+    const managerDispatcher = await call("/usuarios", "POST", { cliente_id: tenantCompany.id, nombre_completo: "Despacho empresa", correo: "despacho-empresa@example.com", rol: "PROGRAMADOR_DESPACHADOR", activo: true, password: "123456789012" }, managerLogin.token);
+    assert.equal(managerDispatcher.cliente_id, tenantCompany.id);
+    const secondTenantCompany = await call("/clientes", "POST", { ...client, tenant_id: account.tenant.id, razon_social: "Segunda empresa cliente", rfc_tax_id: "CLI010101DDD", correo: "segunda-empresa@example.com" }, tenantLogin.token);
+    assert.equal(secondTenantCompany.tenant_id, account.tenant.id);
+    const tenantZone = await call("/zonas", "POST", { propietario_cliente_id: tenantCompany.id, nombre: "Zona cliente", descripcion: "", activo: true }, tenantLogin.token);
+    const tenantStops = [];
+    for (const nombre of ["Inicio cliente", "Destino cliente"]) {
+      tenantStops.push(await call("/locaciones", "POST", { zona_id: tenantZone.id, cliente_id: tenantCompany.id, nombre, direccion: "Centro", ciudad: "Monterrey", tipo: "PARADA", latitud: null, longitud: null, activo: true }, tenantLogin.token));
+    }
+    const tenantMode = await call("/modos-servicio", "POST", { nombre: "Entrada cliente", descripcion: "", cliente_ids: [tenantCompany.id], activo: true }, tenantLogin.token);
+    const tenantRoute = await call("/rutas", "POST", { zona_id: tenantZone.id, nombre: "Ruta cliente", kilometros_estimados: 10, duracion_estimada_min: 20, locacion_ids: tenantStops.map(x => x.id), cliente_ids: [tenantCompany.id], pasajero_ids: [], modo_servicio_ids: [tenantMode.id], registra_pasajeros: false, link_maps: "", activo: true }, tenantLogin.token);
+    const tenantDriver = await call("/choferes", "POST", { propietario_cliente_id: tenantCompany.id, nombre_completo: "Operador cliente", telefono: "8111111111", numero_licencia: "LIC-CLI", tipo_licencia: "E", vencimiento_licencia: "2030-01-01", estatus: "ACTIVO" }, tenantLogin.token);
+    const tenantVehicle = await call("/vehiculos", "POST", { propietario_cliente_id: tenantCompany.id, chofer_predeterminado_id: tenantDriver.id, tipo: "Van", marca: "Toyota", modelo: "Hiace", color: "Blanco", placas: "CLI-123", numero_poliza_seguro: "POL-CLI", vencimiento_poliza: "2030-01-01", estatus: "ACTIVO", capacidad: 20 }, tenantLogin.token);
+    const tenantRate = await call("/tarifas-cliente", "POST", { cliente_id: tenantCompany.id, zona_id: tenantZone.id, ruta_id: tenantRoute.id, tipo_cobro: "FIJO", importe: 1000, tarifa_base: 1000, costo_por_kilometro: 0, costo_por_pasajero: 0, pago_operador: 400, vigente_desde: "2026-01-01", activo: true }, tenantLogin.token);
+    const tenantService = await call("/servicios", "POST", { cliente_id: tenantCompany.id, ruta_id: tenantRoute.id, modo: "ENTRADA", modo_servicio_id: tenantMode.id, tarifa_id: tenantRate.id, chofer_id: tenantDriver.id, vehiculo_id: tenantVehicle.id, fecha_hora_programada: "2026-10-30T14:00:00.000Z", estatus_operativo: "PROGRAMADO", cantidad_pasajeros: 1, pasajero_ids: [], importe_cliente: 1000, importe_operador: 400, notas: "Cliente" }, tenantLogin.token);
+    assert.equal(tenantService.cliente_id, tenantCompany.id);
+    const tenantScopedData = await call("/data", "GET", undefined, tenantLogin.token);
+    assert.deepEqual(new Set(tenantScopedData.clientes.map(x => x.id)), new Set([tenantCompany.id, secondTenantCompany.id]));
+    assert.deepEqual(tenantScopedData.servicios.map(x => x.id), [tenantService.id]);
+    assert.deepEqual(tenantScopedData.rutas.map(x => x.id), [tenantRoute.id]);
+    assert.deepEqual(tenantScopedData.choferes.map(x => x.id), [tenantDriver.id]);
+    assert.equal(tenantScopedData.tarifas_cliente.length, 1);
+    const companyScopedData = await call("/data", "GET", undefined, managerLogin.token);
+    assert.deepEqual(companyScopedData.clientes.map(x => x.id), [tenantCompany.id]);
+    assert.deepEqual(companyScopedData.servicios.map(x => x.id), [tenantService.id]);
+    const managerCannotEditSecondCompany = await fetch(`${base}/api/clientes/${secondTenantCompany.id}`, { method: "PUT", headers: { Authorization: `Bearer ${managerLogin.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ activo: false }) });
+    assert.equal(managerCannotEditSecondCompany.status, 403);
+    await call(`/servicios/${tenantService.id}/estatus`, "PATCH", { status: "FINALIZADO" }, managerLogin.token);
+    const tenantConsolidation = await call("/consolidaciones", "POST", { cliente_id: tenantCompany.id, from: "2026-10-30", to: "2026-10-30" }, tenantLogin.token);
+    assert.deepEqual(tenantConsolidation.servicio_ids, [tenantService.id]);
+    assert.equal((await call("/data", "GET", undefined, managerLogin.token)).consolidaciones.length, 1);
+    const tenantCannotCreateAccount = await fetch(`${base}/api/cuentas`, { method: "POST", headers: { Authorization: `Bearer ${tenantLogin.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ nombre: "Otra cuenta", admin: { nombre_completo: "Otro", correo: "otro@example.com", password: "123456789012" } }) });
+    assert.equal(tenantCannotCreateAccount.status, 403);
+    await call(`/cuentas/${account.tenant.id}`, "PUT", { activo: false }, token);
+    const blockedToken = await fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${tenantLogin.token}` } });
+    assert.equal(blockedToken.status, 401);
   } finally {
     if (http) await new Promise((resolve) => http.close(resolve));
     if (dataSource.isInitialized) await dataSource.destroy();

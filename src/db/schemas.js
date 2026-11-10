@@ -32,7 +32,14 @@ const belongsTo = (target, field, nullable = false) => ({
 });
 
 const schemas = {
+  tenants: schema("tenants", {
+    nombre: str(),
+    activo: bool(),
+    created_at: timestamp(),
+    updated_at: timestamp(),
+  }),
   clientes: schema("clientes", {
+    tenant_id: int(true),
     razon_social: str(),
     rfc_tax_id: str(),
     telefono: str(),
@@ -49,6 +56,7 @@ const schemas = {
   usuarios: schema(
     "usuarios",
     {
+      tenant_id: int(true),
       cliente_id: int(true),
       nombre_completo: str(),
       correo: str(),
