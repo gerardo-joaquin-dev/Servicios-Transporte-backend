@@ -423,13 +423,20 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       admin: { nombre_completo: "Dueño Cliente", correo: "dueno@example.com", password: "123456789012" },
     }, token);
     const tenantLogin = await call("/auth/login", "POST", { email: "dueno@example.com", password: "123456789012" });
-    assert.equal(tenantLogin.user.role, "TENANT_ADMIN");
+    assert.equal(tenantLogin.user.role, "CLIENT_OWNER");
     assert.equal(tenantLogin.user.tenant_id, account.tenant.id);
+    const platformPeer = await call("/usuarios", "POST", { tenant_id: null, cliente_id: null, nombre_completo: "Administradora Flotnix", correo: "plataforma-peer@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, token);
+    assert.equal((await call("/auth/login", "POST", { email: platformPeer.correo, password: "123456789012" })).user.role, "PLATFORM_ADMIN");
+    const secondClientUser = await call("/usuarios", "POST", { tenant_id: account.tenant.id, cliente_id: null, nombre_completo: "Cliente adicional", correo: "cliente-adicional@example.com", rol: "CLIENTE", activo: true, password: "123456789012" }, token);
+    assert.equal((await call("/auth/login", "POST", { email: secondClientUser.correo, password: "123456789012" })).user.role, "CLIENT_OWNER");
+    const clientCannotCreateOwner = await fetch(`${base}/api/usuarios`, { method: "POST", headers: { Authorization: `Bearer ${tenantLogin.token}`, "Content-Type": "application/json" }, body: JSON.stringify({ tenant_id: account.tenant.id, cliente_id: null, nombre_completo: "Dueño falso", correo: "falso@example.com", rol: "CLIENTE", activo: true, password: "123456789012" }) });
+    assert.equal(clientCannotCreateOwner.status, 403);
     const tenantCompany = await call("/clientes", "POST", { ...client, tenant_id: account.tenant.id, razon_social: "Empresa del cliente", rfc_tax_id: "CLI010101CCC", correo: "empresa-cliente@example.com" }, tenantLogin.token);
     assert.equal(tenantCompany.tenant_id, account.tenant.id);
     const peer = await call("/usuarios", "POST", { cliente_id: null, nombre_completo: "Colega", correo: "colega@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, tenantLogin.token);
     assert.equal(peer.tenant_id, account.tenant.id);
-    assert.equal((await call("/auth/login", "POST", { email: peer.correo, password: "123456789012" })).user.role, "TENANT_ADMIN");
+    const peerLogin = await call("/auth/login", "POST", { email: peer.correo, password: "123456789012" });
+    assert.equal(peerLogin.user.role, "TENANT_ADMIN");
     const companyManager = await call("/usuarios", "POST", { cliente_id: tenantCompany.id, nombre_completo: "Gerente", correo: "gerente@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, tenantLogin.token);
     const managerLogin = await call("/auth/login", "POST", { email: companyManager.correo, password: "123456789012" });
     assert.equal(managerLogin.user.role, "COMPANY_ADMIN");
@@ -442,7 +449,7 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     assert.equal(managerCreatesAdmin.status, 403);
     const managerDispatcher = await call("/usuarios", "POST", { cliente_id: tenantCompany.id, nombre_completo: "Despacho empresa", correo: "despacho-empresa@example.com", rol: "PROGRAMADOR_DESPACHADOR", activo: true, password: "123456789012" }, managerLogin.token);
     assert.equal(managerDispatcher.cliente_id, tenantCompany.id);
-    const secondTenantCompany = await call("/clientes", "POST", { ...client, tenant_id: account.tenant.id, razon_social: "Segunda empresa cliente", rfc_tax_id: "CLI010101DDD", correo: "segunda-empresa@example.com" }, tenantLogin.token);
+    const secondTenantCompany = await call("/clientes", "POST", { ...client, tenant_id: account.tenant.id, razon_social: "Segunda empresa cliente", rfc_tax_id: "CLI010101DDD", correo: "segunda-empresa@example.com" }, peerLogin.token);
     assert.equal(secondTenantCompany.tenant_id, account.tenant.id);
     const tenantZone = await call("/zonas", "POST", { propietario_cliente_id: tenantCompany.id, nombre: "Zona cliente", descripcion: "", activo: true }, tenantLogin.token);
     const tenantStops = [];

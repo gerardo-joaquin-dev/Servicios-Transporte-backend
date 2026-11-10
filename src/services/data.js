@@ -184,7 +184,7 @@ function scopeData(data, user) {
     item.cliente_ids.some((id) => companyIds.has(id)),
   );
   const modeIds = new Set(modes.map((item) => item.id));
-  const admin = user.rol === "ADMINISTRADOR";
+  const admin = user.rol === "ADMINISTRADOR" || user.rol === "CLIENTE";
   return {
     ...data,
     tenants: data.tenants.filter((item) => item.id === user.tenant_id),

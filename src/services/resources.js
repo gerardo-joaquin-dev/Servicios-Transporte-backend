@@ -28,7 +28,7 @@ const labels = {
   usuarios: "Usuario",
 };
 const adminOnly = (user) => {
-  if (user.rol !== "ADMINISTRADOR") throw bad("Acceso denegado", 403);
+  if (!["ADMINISTRADOR", "CLIENTE"].includes(user.rol)) throw bad("Acceso denegado", 403);
 };
 const platformOnly = (user) => {
   adminOnly(user);
@@ -253,7 +253,13 @@ async function saveResource(manager, table, raw, id, user) {
   if (table === "clientes" && current && user.cliente_id && input.activo !== current.activo)
     throw bad("Solo el administrador maestro puede activar o desactivar clientes", 403);
   if (table === "usuarios") {
+    if (current?.rol === "CLIENTE" && user.tenant_id && id !== user.id)
+      throw bad("Solo Flotnix puede administrar usuarios tipo cliente", 403);
     if (user.tenant_id) input.tenant_id = user.tenant_id;
+    if (input.rol === "CLIENTE" && user.tenant_id && (!current || current.rol !== "CLIENTE"))
+      throw bad("Solo Flotnix puede crear usuarios tipo cliente", 403);
+    if (input.rol === "CLIENTE" && (!input.tenant_id || input.cliente_id))
+      throw bad("El usuario cliente debe pertenecer a una cuenta, no a una empresa", 403);
     if (user.cliente_id) {
       input.cliente_id = user.cliente_id;
       if (input.rol === "ADMINISTRADOR" || current?.rol === "ADMINISTRADOR")
@@ -383,6 +389,8 @@ async function deleteResource(manager, table, id, user) {
   adminOnly(user);
   if (table === "clientes") tenantAdminOnly(user);
   const record = await checkAccess(manager, table, id, user);
+  if (table === "usuarios" && record.rol === "CLIENTE" && user.tenant_id)
+    throw bad("Solo Flotnix puede eliminar usuarios tipo cliente", 403);
   if (table === "usuarios" && user.cliente_id && record.rol === "ADMINISTRADOR")
     throw bad("Solo el administrador del cliente puede eliminar administradores", 403);
   if (table === "usuarios" && id === user.id)

@@ -26,7 +26,7 @@ async function createTenant(manager, raw, user) {
     cliente_id: null,
     nombre_completo: input.admin.nombre_completo,
     correo: input.admin.correo,
-    rol: "ADMINISTRADOR",
+    rol: "CLIENTE",
     activo: true,
     password_hash: await bcrypt.hash(input.admin.password, 12),
     token_version: 0,

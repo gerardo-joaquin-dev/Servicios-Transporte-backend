@@ -18,7 +18,7 @@ const {
 const transport = require("./services/transport");
 const tenants = require("./services/tenants");
 const publicService = (service, user) => {
-  if (user.rol === "ADMINISTRADOR") return service;
+  if (user.rol === "ADMINISTRADOR" || user.rol === "CLIENTE") return service;
   const { tarifa_id, importe_cliente, importe_operador, ...safe } = service;
   return safe;
 };
@@ -53,6 +53,8 @@ if (jwtSecret.length < 32)
 const roleFor = (user) =>
   !user.tenant_id && user.rol === "ADMINISTRADOR"
     ? "PLATFORM_ADMIN"
+    : user.rol === "CLIENTE" && user.tenant_id && !user.cliente_id
+      ? "CLIENT_OWNER"
     : !user.cliente_id && user.rol === "ADMINISTRADOR"
       ? "TENANT_ADMIN"
     : user.rol === "ADMINISTRADOR"

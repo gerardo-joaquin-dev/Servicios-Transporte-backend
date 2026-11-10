@@ -168,7 +168,7 @@ async function saveService(manager, raw, id, user) {
       : raw,
   );
   input.estatus_operativo = current?.estatus_operativo || "PROGRAMADO";
-  if (user.rol !== "ADMINISTRADOR") {
+  if (user.rol !== "ADMINISTRADOR" && user.rol !== "CLIENTE") {
     const rates = await repo(manager, "tarifas_cliente").find({
       where: { cliente_id: input.cliente_id, ruta_id: input.ruta_id, activo: true },
       order: { vigente_desde: "DESC", id: "DESC" },

@@ -135,12 +135,12 @@ const user = z
     cliente_id: maybeId,
     nombre_completo: name,
     correo: email,
-    rol: status(["ADMINISTRADOR", "PROGRAMADOR_DESPACHADOR"]),
+    rol: status(["ADMINISTRADOR", "CLIENTE", "PROGRAMADOR_DESPACHADOR"]),
     activo: active,
     password: z.string().min(12).max(128).optional(),
   })
   .refine(
-    (value) => value.rol === "ADMINISTRADOR" || value.cliente_id !== null,
+    (value) => value.rol !== "PROGRAMADOR_DESPACHADOR" || value.cliente_id !== null,
     {
       message: "El despachador debe pertenecer a una empresa",
       path: ["cliente_id"],
