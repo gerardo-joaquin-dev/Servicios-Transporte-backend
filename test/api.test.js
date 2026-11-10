@@ -67,6 +67,9 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       },
       token,
     );
+    const otherClient = await call("/clientes", "POST", { ...client, razon_social: "Empresa Dos", rfc_tax_id: "XYZ010101BBB", correo: "otra@example.com" }, token);
+    const otherUser = await call("/usuarios", "POST", { cliente_id: otherClient.id, nombre_completo: "Otro administrador", correo: "otro-admin@example.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, token);
+    const otherLogin = await call("/auth/login", "POST", { email: otherUser.correo, password: "123456789012" });
     const zone = await call(
       "/zonas",
       "POST",
@@ -125,6 +128,7 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       "/choferes",
       "POST",
       {
+        propietario_cliente_id: client.id,
         nombre_completo: "Operador Uno",
         telefono: "8111111111",
         numero_licencia: "LIC-001",
@@ -138,6 +142,7 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       "/vehiculos",
       "POST",
       {
+        propietario_cliente_id: client.id,
         chofer_predeterminado_id: driver.id,
         tipo: "Van",
         marca: "Toyota",
@@ -275,6 +280,10 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     );
     assert.equal(Number(service.importe_cliente), 1500);
     assert.equal(Number(service.importe_operador), 650);
+    const creationAudit = (await call("/data", "GET", undefined, token)).servicio_auditoria.filter((item) => item.servicio_id === service.id);
+    assert.equal(creationAudit.length, 1);
+    assert.equal(creationAudit[0].tipo, "CREACION");
+    assert.equal(creationAudit[0].usuario_id, login.user.id);
     const edited = await call(
       `/servicios/${service.id}`,
       "PUT",
@@ -283,6 +292,13 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     );
     assert.equal(edited.notas, "Cambio de instrucciones");
     assert.equal(Number(edited.importe_cliente), 1500);
+    const dispatchEdit = await call(`/servicios/${service.id}`, "PUT", { notas: "Despacho actualizado", importe_cliente: 1, importe_operador: 1, tarifa_id: 99999 }, dispatchLogin.token);
+    assert.equal(dispatchEdit.importe_cliente, undefined);
+    assert.equal(dispatchEdit.importe_operador, undefined);
+    const auditedEdit = (await call("/data", "GET", undefined, token)).servicios.find((item) => item.id === service.id);
+    assert.equal(auditedEdit.importe_cliente, 1500);
+    assert.equal(auditedEdit.importe_operador, 650);
+    assert.ok(auditedEdit.modification_count >= 2);
     const dispatch = await call(
       `/servicios/${service.id}/envios`,
       "POST",
@@ -345,6 +361,12 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     const scoped = await call("/data", "GET", undefined, companyLogin.token);
     assert.equal(scoped.clientes.length, 1);
     assert.equal(scoped.usuarios.length, 2);
+    assert.ok(!scoped.usuarios.some((item) => item.id === otherUser.id));
+    assert.ok(!scoped.clientes.some((item) => item.id === otherClient.id));
+    const otherScoped = await call("/data", "GET", undefined, otherLogin.token);
+    assert.equal(otherScoped.clientes.length, 1);
+    assert.equal(otherScoped.servicios.length, 0);
+    assert.ok(!otherScoped.usuarios.some((item) => item.id === user.id));
     assert.equal(scoped.facturas.length, 0);
     const dispatchData = await call(
       "/data",
@@ -353,6 +375,18 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       dispatchLogin.token,
     );
     assert.equal(dispatchData.usuarios.length, 0);
+    assert.equal(dispatchData.tarifas_cliente.length, 0);
+    assert.equal(dispatchData.servicios[0].importe_cliente, undefined);
+    assert.equal(dispatchData.servicios[0].importe_operador, undefined);
+    assert.equal(dispatchData.servicios[0].programado_por_nombre, login.user.nombre_completo);
+    assert.equal(dispatchData.servicio_auditoria.length, 0);
+    assert.ok(data.servicio_auditoria.some((item) => item.usuario_id === dispatcher.id && item.cambios.notas));
+    const companyCannotDeactivate = await fetch(`${base}/api/clientes/${client.id}`, {
+      method: "PUT",
+      headers: { Authorization: `Bearer ${companyLogin.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ activo: false }),
+    });
+    assert.equal(companyCannotDeactivate.status, 403);
     const financeForbidden = await fetch(`${base}/api/consolidaciones`, {
       method: "POST",
       headers: {
@@ -366,6 +400,21 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
       }),
     });
     assert.equal(financeForbidden.status, 403);
+    const dispatchCreated = await call("/servicios", "POST", {
+      cliente_id: client.id, ruta_id: route.id, modo: "ENTRADA", modo_servicio_id: mode.id,
+      tarifa_id: 99999, chofer_id: driver.id, vehiculo_id: vehicle.id,
+      fecha_hora_programada: "2026-10-31T18:00:00.000Z", estatus_operativo: "PROGRAMADO",
+      cantidad_pasajeros: 2, pasajero_ids: [], importe_cliente: 1, importe_operador: 1, notas: "Creado por despacho",
+    }, dispatchLogin.token);
+    assert.equal(dispatchCreated.importe_cliente, undefined);
+    const dispatchCreatedAdminView = (await call("/data", "GET", undefined, token)).servicios.find((item) => item.id === dispatchCreated.id);
+    assert.equal(dispatchCreatedAdminView.importe_cliente, 1500);
+    assert.equal(dispatchCreatedAdminView.programado_por_id, dispatcher.id);
+    await call(`/clientes/${otherClient.id}`, "PUT", { activo: false }, token);
+    const inactiveToken = await fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${otherLogin.token}` } });
+    assert.equal(inactiveToken.status, 401);
+    const inactiveLogin = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: otherUser.correo, password: "123456789012" }) });
+    assert.equal(inactiveLogin.status, 401);
   } finally {
     if (http) await new Promise((resolve) => http.close(resolve));
     if (dataSource.isInitialized) await dataSource.destroy();

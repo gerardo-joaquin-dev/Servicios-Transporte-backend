@@ -104,6 +104,8 @@ async function validateRelations(manager, table, input, user) {
     const zone = await exists(manager, "zonas", input.zona_id, "Zona");
     if (user.cliente_id && zone.propietario_cliente_id !== user.cliente_id)
       throw bad("La zona no pertenece a tu empresa");
+    if (input.cliente_id && zone.propietario_cliente_id && zone.propietario_cliente_id !== input.cliente_id)
+      throw bad("La zona pertenece a otra empresa");
     if (input.cliente_id) await activeClient(manager, input.cliente_id);
   }
   if (table === "vehiculos") {
@@ -120,6 +122,8 @@ async function validateRelations(manager, table, input, user) {
       );
       if (user.cliente_id && driver.propietario_cliente_id !== user.cliente_id)
         throw bad("El operador no pertenece a tu empresa");
+      if (input.propietario_cliente_id && driver.propietario_cliente_id && driver.propietario_cliente_id !== input.propietario_cliente_id)
+        throw bad("El operador pertenece a otra empresa");
     }
   }
   if (table === "rutas") {
@@ -127,6 +131,10 @@ async function validateRelations(manager, table, input, user) {
     if (user.cliente_id && zone.propietario_cliente_id !== user.cliente_id)
       throw bad("La zona no pertenece a tu empresa");
     for (const id of input.cliente_ids) await activeClient(manager, id);
+    if (input.propietario_cliente_id && input.cliente_ids.some((id) => id !== input.propietario_cliente_id))
+      throw bad("Una ruta de empresa solo puede asociarse a su propietaria");
+    if (input.cliente_ids.length > 1 && zone.propietario_cliente_id)
+      throw bad("Una ruta compartida requiere una zona de plataforma");
     if (
       user.cliente_id &&
       input.cliente_ids.some((id) => id !== user.cliente_id)
@@ -136,12 +144,16 @@ async function validateRelations(manager, table, input, user) {
       const location = await exists(manager, "locaciones", id, "Parada");
       if (location.zona_id !== zone.id)
         throw bad("Todas las paradas deben pertenecer a la zona de la ruta");
+      if (location.cliente_id && (input.cliente_ids.length !== 1 || location.cliente_id !== input.cliente_ids[0]))
+        throw bad("La parada pertenece a otra empresa");
     }
     for (const id of input.pasajero_ids) {
       const passenger = await exists(manager, "pasajeros", id, "Pasajero");
       if (!input.cliente_ids.includes(passenger.cliente_id))
         throw bad("El pasajero no pertenece a las empresas de la ruta");
     }
+    if (input.cliente_ids.length > 1 && input.pasajero_ids.length)
+      throw bad("Una ruta compartida no puede incluir pasajeros privados");
     await requireIds(manager, "modos_servicio", input.modo_servicio_ids);
     for (const modeId of input.modo_servicio_ids) {
       const linked = await manager.query(
@@ -192,6 +204,8 @@ async function saveResource(manager, table, raw, id, user) {
   let input = schema.parse(
     table === "clientes" && current ? { ...current, ...raw } : raw,
   );
+  if (table === "clientes" && current && user.cliente_id && input.activo !== current.activo)
+    throw bad("Solo el administrador maestro puede activar o desactivar clientes", 403);
   input = await validateRelations(manager, table, input, user);
   if (table === "choferes" && input.vencimiento_licencia < todayMexico())
     input.estatus = "INACTIVO";

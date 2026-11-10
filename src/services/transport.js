@@ -15,6 +15,8 @@ const serviceAccess = async (manager, id, user) => {
   owner(user, service.cliente_id);
   return service;
 };
+const auditActor = (manager, user) =>
+  manager.query("SELECT set_config('app.user_id', $1, true)", [String(user.id)]);
 const uniqueIds = (ids) =>
   Array.isArray(ids) &&
   ids.length > 0 &&
@@ -29,6 +31,11 @@ async function validateService(manager, input, user, currentId) {
   await activeClient(manager, input.cliente_id);
   const route = await requireOne(manager, "rutas", input.ruta_id, "Ruta");
   if (!route.activo) throw bad("Selecciona una ruta activa");
+  if (route.propietario_cliente_id && route.propietario_cliente_id !== input.cliente_id)
+    throw bad("La ruta pertenece a otra empresa");
+  const zone = await requireOne(manager, "zonas", route.zona_id, "Zona");
+  if (zone.propietario_cliente_id && zone.propietario_cliente_id !== input.cliente_id)
+    throw bad("La zona pertenece a otra empresa");
   const routeClient = await manager.query(
     "SELECT 1 FROM ruta_clientes WHERE ruta_id=$1 AND cliente_id=$2",
     [route.id, input.cliente_id],
@@ -92,6 +99,9 @@ async function validateService(manager, input, user, currentId) {
     vehicle.vencimiento_poliza < todayMexico()
   )
     throw bad("Selecciona un operador y una unidad activos y vigentes");
+  if ((driver.propietario_cliente_id && driver.propietario_cliente_id !== input.cliente_id) ||
+      (vehicle.propietario_cliente_id && vehicle.propietario_cliente_id !== input.cliente_id))
+    throw bad("El operador y la unidad no corresponden a esta empresa");
   if (
     user.cliente_id &&
     (driver.propietario_cliente_id !== user.cliente_id ||
@@ -132,6 +142,7 @@ async function validateService(manager, input, user, currentId) {
 }
 
 async function saveService(manager, raw, id, user) {
+  await auditActor(manager, user);
   const current = id ? await serviceAccess(manager, id, user) : null;
   if (current && current.estatus_administrativo !== "ABIERTO")
     throw bad("No se puede editar un servicio en proceso administrativo");
@@ -157,6 +168,16 @@ async function saveService(manager, raw, id, user) {
         }
       : raw,
   );
+  input.estatus_operativo = current?.estatus_operativo || "PROGRAMADO";
+  if (user.rol !== "ADMINISTRADOR") {
+    const rates = await repo(manager, "tarifas_cliente").find({
+      where: { cliente_id: input.cliente_id, ruta_id: input.ruta_id, activo: true },
+      order: { vigente_desde: "DESC", id: "DESC" },
+    });
+    const selected = rates.find((item) => item.id === current?.tarifa_id) || rates[0];
+    if (!selected) throw bad("No hay una tarifa activa para esta ruta");
+    input.tarifa_id = selected.id;
+  }
   const { route, rate } = await validateService(manager, input, user, id);
   if (!current && !rate) throw bad("Selecciona una tarifa configurada");
   const pricingChanged =
@@ -206,10 +227,21 @@ async function saveService(manager, raw, id, user) {
     "pasajero_id",
     pasajero_ids,
   );
+  if (current && JSON.stringify([...previousPassengers].sort()) !== JSON.stringify([...pasajero_ids].sort())) {
+    const [latest] = await manager.query("SELECT modification_count FROM servicios WHERE id=$1", [saved.id]);
+    const passengerChange = JSON.stringify({ pasajero_ids: { anterior: previousPassengers, nuevo: pasajero_ids } });
+    if (latest.modification_count > current.modification_count) {
+      await manager.query("UPDATE servicio_auditoria SET cambios = cambios || $2::jsonb WHERE id = (SELECT id FROM servicio_auditoria WHERE servicio_id=$1 ORDER BY id DESC LIMIT 1)", [saved.id, passengerChange]);
+    } else {
+      await manager.query("INSERT INTO servicio_auditoria (servicio_id, cliente_id, usuario_id, usuario_nombre, tipo, cambios) VALUES ($1,$2,$3,$4,'MODIFICACION',$5::jsonb)", [saved.id, saved.cliente_id, user.id, user.nombre_completo, passengerChange]);
+      await manager.query("UPDATE servicios SET modification_count = modification_count + 1, updated_at = now(), updated_by_id = $2 WHERE id = $1", [saved.id, user.id]);
+    }
+  }
   return { ...saved, pasajero_ids };
 }
 
 async function updateServiceStatus(manager, id, status, user) {
+  await auditActor(manager, user);
   const service = await serviceAccess(manager, id, user);
   if (!["PROGRAMADO", "EN_RUTA", "FINALIZADO", "CANCELADO"].includes(status))
     throw bad("Estado operativo inválido");
@@ -222,6 +254,7 @@ async function updateServiceStatus(manager, id, status, user) {
 }
 
 async function reopenRejectedService(manager, id, user) {
+  await auditActor(manager, user);
   adminOnly(user);
   const service = await serviceAccess(manager, id, user);
   if (service.estatus_administrativo !== "RECHAZADO")
@@ -231,6 +264,7 @@ async function reopenRejectedService(manager, id, user) {
 }
 
 async function createConsolidation(manager, body, user) {
+  await auditActor(manager, user);
   platformOnly(user);
   const { cliente_id, from, to } = body;
   if (
@@ -276,6 +310,7 @@ async function createConsolidation(manager, body, user) {
 }
 
 async function advanceConsolidation(manager, id, action, serviceIds, user) {
+  await auditActor(manager, user);
   platformOnly(user);
   const record = await requireOne(
     manager,
@@ -341,6 +376,7 @@ async function advanceConsolidation(manager, id, action, serviceIds, user) {
 }
 
 async function createInvoice(manager, consolidationId, serviceIds, user) {
+  await auditActor(manager, user);
   platformOnly(user);
   const consolidation = await requireOne(
     manager,
@@ -396,6 +432,7 @@ async function createInvoice(manager, consolidationId, serviceIds, user) {
 }
 
 async function advanceInvoice(manager, id, action, serviceIds, user) {
+  await auditActor(manager, user);
   platformOnly(user);
   const invoice = await requireOne(manager, "facturas", id, "Factura");
   owner(user, invoice.cliente_id);
@@ -451,6 +488,7 @@ async function advanceInvoice(manager, id, action, serviceIds, user) {
 }
 
 async function payOperator(manager, id, user) {
+  await auditActor(manager, user);
   platformOnly(user);
   await manager.query("SELECT id FROM servicios WHERE id=$1 FOR UPDATE", [id]);
   const service = await serviceAccess(manager, id, user);

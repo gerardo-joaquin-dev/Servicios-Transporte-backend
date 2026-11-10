@@ -5,12 +5,13 @@ const {
   InitialSchema1761868800000,
 } = require("./migrations/1761868800000-InitialSchema");
 const { Dictionaries1793404800000 } = require("./migrations/1793404800000-Dictionaries");
+const { ServiceAudit1794182400000 } = require("./migrations/1794182400000-ServiceAudit");
 
 const dataSource = new DataSource({
   type: "postgres",
   url: required("DATABASE_URL"),
   entities: Object.values(schemas),
-  migrations: [InitialSchema1761868800000, Dictionaries1793404800000],
+  migrations: [InitialSchema1761868800000, Dictionaries1793404800000, ServiceAudit1794182400000],
   synchronize: false,
   migrationsRun: false,
   logging: process.env.DB_LOG === "true",

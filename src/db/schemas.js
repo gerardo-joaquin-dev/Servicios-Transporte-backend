@@ -210,6 +210,10 @@ const schemas = {
       importe_cliente: num(),
       importe_operador: num(),
       notas: text(),
+      created_at: timestamp(true),
+      updated_at: timestamp(true),
+      updated_by_id: int(true),
+      modification_count: { type: "integer", default: 0 },
     },
     {
       cliente: belongsTo("clientes", "cliente_id"),
@@ -219,6 +223,7 @@ const schemas = {
       chofer: belongsTo("choferes", "chofer_id"),
       vehiculo: belongsTo("vehiculos", "vehiculo_id"),
       programador: belongsTo("usuarios", "programado_por_id", true),
+      editor: belongsTo("usuarios", "updated_by_id", true),
     },
   ),
   consolidaciones: schema(

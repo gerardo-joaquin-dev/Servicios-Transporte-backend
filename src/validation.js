@@ -158,11 +158,11 @@ const service = z.object({
     "EN_RUTA",
     "FINALIZADO",
     "CANCELADO",
-  ]),
+  ]).optional().default("PROGRAMADO"),
   cantidad_pasajeros: z.number().int().min(0),
   pasajero_ids: ids.optional().default([]),
-  importe_cliente: amount,
-  importe_operador: amount,
+  importe_cliente: amount.optional().default(0),
+  importe_operador: amount.optional().default(0),
   notas: optionalText,
 });
 

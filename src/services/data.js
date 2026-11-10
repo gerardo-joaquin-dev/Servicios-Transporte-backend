@@ -75,6 +75,7 @@ async function getData(manager) {
     await repo(manager, "tipos_unidad").find({ order: { id: "ASC" } })
   ).map((row) => row.nombre);
   data.diccionarios = await repo(manager, "diccionarios").find({ order: { id: "ASC" } });
+  data.servicio_auditoria = await manager.query("SELECT * FROM servicio_auditoria ORDER BY fecha DESC, id DESC");
   const [
     routeStops,
     routePassengers,
@@ -124,13 +125,15 @@ async function getData(manager) {
   }
   for (const mode of data.modos_servicio)
     mode.cliente_ids = valuesFor(modeClients, "modo_id", "cliente_id", mode.id);
-  for (const service of data.servicios)
+  for (const service of data.servicios) {
     service.pasajero_ids = valuesFor(
       servicePassengers,
       "servicio_id",
       "pasajero_id",
       service.id,
     );
+    service.programado_por_nombre = data.usuarios.find((user) => user.id === service.programado_por_id)?.nombre_completo ?? null;
+  }
   for (const consolidation of data.consolidaciones) {
     consolidation.servicio_ids = valuesFor(
       consolidationServices,
@@ -170,9 +173,8 @@ function scopeData(data, user) {
   ]);
   const routes = data.rutas.filter(
     (item) =>
-      routeIds.has(item.id) ||
-      item.propietario_cliente_id === id ||
-      item.cliente_ids.includes(id),
+      (item.propietario_cliente_id === null || item.propietario_cliente_id === id) &&
+      (routeIds.has(item.id) || item.propietario_cliente_id === id || item.cliente_ids.includes(id)),
   );
   const zoneIds = new Set(routes.map((item) => item.zona_id));
   const stopIds = new Set(routes.flatMap((item) => item.locacion_ids));
@@ -186,7 +188,10 @@ function scopeData(data, user) {
         : [],
     clientes: data.clientes.filter((item) => item.id === id),
     pasajeros: data.pasajeros.filter((item) => item.cliente_id === id),
-    servicios: services,
+    servicios: user.rol === "ADMINISTRADOR" ? services : services.map(({ tarifa_id, importe_cliente, importe_operador, ...service }) => service),
+    servicio_auditoria: user.rol === "ADMINISTRADOR"
+      ? data.servicio_auditoria.filter((item) => item.cliente_id === id)
+      : [],
     rutas: routes.map((route) => ({
       ...route,
       cliente_ids: route.cliente_ids.filter((clientId) => clientId === id),
@@ -202,20 +207,20 @@ function scopeData(data, user) {
       ),
     })),
     zonas: data.zonas.filter(
-      (item) => zoneIds.has(item.id) || item.propietario_cliente_id === id,
+      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (zoneIds.has(item.id) || item.propietario_cliente_id === id),
     ),
     locaciones: data.locaciones.filter(
-      (item) => stopIds.has(item.id) || item.cliente_id === id,
+      (item) => (item.cliente_id === null || item.cliente_id === id) && (stopIds.has(item.id) || item.cliente_id === id),
     ),
     choferes: data.choferes.filter(
-      (item) => driverIds.has(item.id) || item.propietario_cliente_id === id,
+      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (driverIds.has(item.id) || item.propietario_cliente_id === id),
     ),
     vehiculos: data.vehiculos.filter(
-      (item) => vehicleIds.has(item.id) || item.propietario_cliente_id === id,
+      (item) => (item.propietario_cliente_id === null || item.propietario_cliente_id === id) && (vehicleIds.has(item.id) || item.propietario_cliente_id === id),
     ),
-    tarifas_cliente: data.tarifas_cliente.filter(
-      (item) => item.cliente_id === id,
-    ),
+    tarifas_cliente: user.rol === "ADMINISTRADOR"
+      ? data.tarifas_cliente.filter((item) => item.cliente_id === id)
+      : [],
     modos_servicio: data.modos_servicio
       .filter((item) => item.cliente_ids.includes(id))
       .map((item) => ({ ...item, cliente_ids: [id] })),

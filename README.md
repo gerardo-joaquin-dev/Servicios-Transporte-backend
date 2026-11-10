@@ -24,6 +24,8 @@ En `Servicios-transporte`, define `VITE_API_URL=http://localhost:4000` (o la URL
 
 La información guardada previamente en `localStorage` no se traslada automáticamente a PostgreSQL. La base creada por la seed comienza sin empresas ni servicios, para registrar los datos desde la web.
 
+Al actualizar una instalación existente, ejecuta `npm run db:migrate` antes de iniciar la nueva versión. La migración de auditoría añade fechas, contador y eventos de creación o modificación a los servicios. Los servicios anteriores conservan sus datos, pero no se les inventa un historial retroactivo.
+
 ## Modelo
 
 La migración inicial incluye empresas, usuarios, tipos de unidad, operadores, unidades, zonas, paradas, pasajeros, rutas, modos de servicio, tarifas, servicios, consolidaciones, facturas y envíos de ruta. Las asociaciones de rutas con paradas ordenadas, empresas, modos y pasajeros; de servicios con pasajeros; de consolidaciones y facturas con servicios están en tablas de relación con claves foráneas. Las facturas suman `importe_cliente` sin agregar IVA.
@@ -44,6 +46,8 @@ Todas las rutas salvo `POST /api/auth/login` y `GET /health` requieren `Authoriz
 | Finanzas          | `POST /api/consolidaciones`, `POST /api/consolidaciones/:id/advance`, `POST /api/consolidaciones/:id/facturas`, `POST /api/facturas/:id/advance`, `POST /api/servicios/:id/pagar-operador`, `POST /api/pagos-operadores/lote` |
 
 El administrador de plataforma accede a todos los datos y procesos. El administrador de empresa administra su empresa, catálogos, usuarios y servicios asociados. El despachador consulta su empresa, programa servicios y registra envíos de ruta. Las finanzas y la configuración global son exclusivas del administrador de plataforma.
+
+El administrador maestro activa o desactiva clientes desde el panel de la web. Una empresa inactiva no puede iniciar sesión ni seguir usando un token existente. La respuesta para despachadores omite tarifas, importes y auditoría; el servidor selecciona y calcula la tarifa al programar un servicio. `/api/data` incluye `servicio_auditoria` para administradores, con usuario, fecha, tipo y campos modificados.
 
 ## Verificar
 

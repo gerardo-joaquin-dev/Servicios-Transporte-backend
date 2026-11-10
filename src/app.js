@@ -15,6 +15,11 @@ const {
   adminOnly,
 } = require("./services/resources");
 const transport = require("./services/transport");
+const publicService = (service, user) => {
+  if (user.rol === "ADMINISTRADOR") return service;
+  const { tarifa_id, importe_cliente, importe_operador, ...safe } = service;
+  return safe;
+};
 
 const app = express();
 app.disable("x-powered-by");
@@ -237,34 +242,24 @@ app.delete("/api/diccionarios/:id", async (req, res) => {
   res.status(204).send();
 });
 
-app.post("/api/servicios", async (req, res) =>
-  res
-    .status(201)
-    .json(
-      await dataSource.transaction((manager) =>
-        transport.saveService(manager, req.body, null, req.user),
-      ),
-    ),
-);
-app.put("/api/servicios/:id", async (req, res) =>
-  res.json(
-    await dataSource.transaction((manager) =>
-      transport.saveService(manager, req.body, Number(req.params.id), req.user),
-    ),
-  ),
-);
-app.patch("/api/servicios/:id/estatus", async (req, res) =>
-  res.json(
-    await dataSource.transaction((manager) =>
-      transport.updateServiceStatus(
-        manager,
-        Number(req.params.id),
-        req.body?.status,
-        req.user,
-      ),
-    ),
-  ),
-);
+app.post("/api/servicios", async (req, res) => {
+  const service = await dataSource.transaction((manager) =>
+    transport.saveService(manager, req.body, null, req.user),
+  );
+  res.status(201).json(publicService(service, req.user));
+});
+app.put("/api/servicios/:id", async (req, res) => {
+  const service = await dataSource.transaction((manager) =>
+    transport.saveService(manager, req.body, Number(req.params.id), req.user),
+  );
+  res.json(publicService(service, req.user));
+});
+app.patch("/api/servicios/:id/estatus", async (req, res) => {
+  const service = await dataSource.transaction((manager) =>
+    transport.updateServiceStatus(manager, Number(req.params.id), req.body?.status, req.user),
+  );
+  res.json(publicService(service, req.user));
+});
 app.post("/api/servicios/:id/reabrir", async (req, res) =>
   res.json(
     await dataSource.transaction((manager) =>
