@@ -1,0 +1,88 @@
+
+name: Deploy Backend - Lightsail
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: flotnix-backend-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar SSH
+        env:
+          SSH_KEY_BASE64: ${{ secrets.AWS_SSH_KEY_BASE64 }}
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          printf '%s' "$SSH_KEY_BASE64" | base64 -d > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+
+          ssh-keygen -y -f ~/.ssh/id_ed25519 > /dev/null
+          ssh-keyscan -H "$AWS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Subir backend a Lightsail
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_USER: ${{ secrets.AWS_USER }}
+        run: |
+          rsync -avz \
+            --exclude='.env' \
+            --exclude='.env.*' \
+            --exclude='node_modules/' \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='dist/' \
+            -e "ssh -i ~/.ssh/id_ed25519" \
+            ./ \
+            "$AWS_USER@$AWS_HOST:/var/www/flotnix-backend/"
+
+      - name: Instalar, migrar y reiniciar PM2
+        env:
+          AWS_HOST: ${{ secrets.AWS_HOST }}
+          AWS_USER: ${{ secrets.AWS_USER }}
+        run: |
+          ssh -i ~/.ssh/id_ed25519 \
+            "$AWS_USER@$AWS_HOST" 'bash -se' <<'EOF'
+          set -euo pipefail
+
+          cd /var/www/flotnix-backend
+
+          echo "Instalando dependencias..."
+          npm ci
+
+          echo "Compilando backend..."
+          npm run build
+
+          echo "Verificando DataSource..."
+          test -f dist/data-source.js || {
+            echo "No existe dist/data-source.js"
+            exit 1
+          }
+
+          echo "Ejecutando migraciones TypeORM..."
+          ./node_modules/.bin/typeorm migration:run \
+            -d dist/data-source.js
+
+          echo "Reiniciando backend..."
+          pm2 restart flotnix-api --update-env
+
+          echo "Verificando PM2..."
+          pm2 describe flotnix-api
+
+          echo "Deploy completado"
+          EOF
