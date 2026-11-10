@@ -77,9 +77,6 @@ jobs:
           echo "Instalando dependencias..."
           npm ci
 
-          echo "Compilando backend..."
-          npm run build
-
           echo "Verificando DataSource..."
           test -f dist/data-source.js || {
             echo "No existe dist/data-source.js"
