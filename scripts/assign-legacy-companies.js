@@ -1,18 +1,18 @@
 const { dataSource } = require("../src/db/data-source");
-const { AssignLegacyCompaniesToJesus1794355200001 } = require("../src/db/migrations/1794355200001-AssignLegacyCompaniesToJesus");
+const { ConvertJesusToClient1794355200002 } = require("../src/db/migrations/1794355200002-ConvertJesusToClient");
 
 async function assignLegacyCompanies() {
   await dataSource.initialize();
   try {
     await dataSource.runMigrations({ transaction: "all" });
     const [target] = await dataSource.query(
-      "SELECT tenant_id, rol FROM usuarios WHERE lower(correo) = $1",
+      "SELECT id FROM usuarios WHERE lower(correo) = $1",
       ["jesusrv@flotnix.com"],
     );
-    if (!target || target.rol !== "CLIENTE" || !target.tenant_id)
-      throw new Error("Primero debe existir jesusrv@flotnix.com como usuario tipo CLIENTE");
+    if (!target)
+      throw new Error("Primero debe existir jesusrv@flotnix.com como usuario de Flotnix");
     await dataSource.transaction(async (manager) => {
-      await new AssignLegacyCompaniesToJesus1794355200001().up(manager.queryRunner);
+      await new ConvertJesusToClient1794355200002().up(manager.queryRunner);
     });
     const [result] = await dataSource.query(
       "SELECT count(*)::int AS total FROM migration_jesusrv_company_assignments",

@@ -500,21 +500,31 @@ test("migraciones, autenticación y flujo completo de la web", async () => {
     await call(`/cuentas/${account.tenant.id}`, "PUT", { activo: false }, token);
     const blockedToken = await fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${tenantLogin.token}` } });
     assert.equal(blockedToken.status, 401);
-    const legacyOwner = await call("/usuarios", "POST", { tenant_id: null, cliente_id: null, nombre_completo: "Jesús", correo: "jesusrv@flotnix.com", rol: "CLIENTE", activo: true, password: "123456789012" }, token);
-    const { AssignLegacyCompaniesToJesus1794355200001 } = require("../src/db/migrations/1794355200001-AssignLegacyCompaniesToJesus");
+    const legacyOwner = await call("/usuarios", "POST", { tenant_id: null, cliente_id: null, nombre_completo: "Jesús", correo: "jesusrv@flotnix.com", rol: "ADMINISTRADOR", activo: true, password: "123456789012" }, token);
+    assert.equal(legacyOwner.tenant_id, null);
+    const { ConvertJesusToClient1794355200002 } = require("../src/db/migrations/1794355200002-ConvertJesusToClient");
     const assignLegacy = async () => dataSource.transaction(async (manager) => {
-      await new AssignLegacyCompaniesToJesus1794355200001().up(manager.queryRunner);
+      await new ConvertJesusToClient1794355200002().up(manager.queryRunner);
     });
     await assignLegacy();
     await assignLegacy();
+    const [convertedOwner] = await dataSource.query("SELECT rol, tenant_id, cliente_id, token_version FROM usuarios WHERE id = $1", [legacyOwner.id]);
+    assert.equal(convertedOwner.rol, "CLIENTE");
+    assert.ok(convertedOwner.tenant_id);
+    assert.equal(convertedOwner.cliente_id, null);
+    assert.equal(convertedOwner.token_version, 1);
+    const oldPlatformToken = require("jsonwebtoken").sign({ sub: String(legacyOwner.id), ver: 0 }, process.env.JWT_SECRET, { algorithm: "HS256", expiresIn: "8h", issuer: "flotnix" });
+    const revokedPlatformAccess = await fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${oldPlatformToken}` } });
+    assert.equal(revokedPlatformAccess.status, 401);
     const assigned = await dataSource.query("SELECT cliente_id FROM migration_jesusrv_company_assignments ORDER BY cliente_id");
     assert.deepEqual(assigned.map(row => row.cliente_id), [client.id, otherClient.id]);
-    const legacyToken = require("jsonwebtoken").sign({ sub: String(legacyOwner.id), ver: 0 }, process.env.JWT_SECRET, { algorithm: "HS256", expiresIn: "8h", issuer: "flotnix" });
+    const legacyToken = require("jsonwebtoken").sign({ sub: String(legacyOwner.id), ver: convertedOwner.token_version }, process.env.JWT_SECRET, { algorithm: "HS256", expiresIn: "8h", issuer: "flotnix" });
+    assert.equal((await call("/auth/me", "GET", undefined, legacyToken)).role, "CLIENT_OWNER");
     const legacyData = await call("/data", "GET", undefined, legacyToken);
     assert.deepEqual(new Set(legacyData.clientes.map(item => item.id)), new Set([client.id, otherClient.id]));
     assert.ok(!legacyData.clientes.some(item => item.id === tenantCompany.id || item.id === secondClientCompany.id));
     const [movedCompanyUser] = await dataSource.query("SELECT tenant_id FROM usuarios WHERE id = $1", [otherUser.id]);
-    assert.equal(movedCompanyUser.tenant_id, legacyOwner.tenant_id);
+    assert.equal(movedCompanyUser.tenant_id, convertedOwner.tenant_id);
   } finally {
     if (http) await new Promise((resolve) => http.close(resolve));
     if (dataSource.isInitialized) await dataSource.destroy();
