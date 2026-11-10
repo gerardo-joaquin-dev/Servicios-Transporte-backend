@@ -77,15 +77,8 @@ jobs:
           echo "Instalando dependencias..."
           npm ci
 
-          echo "Verificando DataSource..."
-          test -f dist/data-source.js || {
-            echo "No existe dist/data-source.js"
-            exit 1
-          }
-
           echo "Ejecutando migraciones..."
-          ./node_modules/.bin/typeorm migration:run \
-            -d dist/data-source.js
+          npm run db:migrate
 
           echo "Reiniciando backend..."
           pm2 restart flotnix-api --update-env
